@@ -1,4 +1,6 @@
 import binascii
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -169,3 +171,23 @@ def test_decode_json_raises_for_invalid_json(token):
     serialized_msg = build_msg(b'{"id": 123456,,"otu_stat":0', token)
     with pytest.raises(PayloadDecodeException):
         Message.parse(serialized_msg, **ctx)
+
+
+def test_send_raises_payload_decode_for_raw_bytes():
+    """Malformed decrypted payloads must not escape as a TypeError."""
+    proto = MiIOProtocol("127.0.0.1")
+    proto._discovered = True
+    proto._device_id = b"\x01\x02\x03\x04"
+    response = SimpleNamespace(
+        header=SimpleNamespace(value={"ts": 0}),
+        data=SimpleNamespace(value=b"not-json"),
+    )
+
+    with (
+        patch.object(proto, "_create_request", return_value={"id": 1}),
+        patch("socket.socket") as mock_socket,
+        patch("miio.miioprotocol.Message.parse", return_value=response),
+    ):
+        mock_socket.return_value.recvfrom.return_value = (b"response", ("127.0.0.1", 54321))
+        with pytest.raises(PayloadDecodeException, match="expected an object"):
+            proto.send("test", retry_count=0)
